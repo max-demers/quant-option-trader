@@ -111,6 +111,7 @@ def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N
         A1[idx_end, :] = 0; A1[idx_end, idx_end] = -0.5 * r
     A1 = A1.tocsr()
 
+
     # A2: v-derivative operator
     alpha_v = -kappa * (theta - v_axe) / (2 * dv) + (0.5 * sigma**2 * v_axe) / (dv**2)
     beta_v = -(sigma**2 * v_axe) / (dv**2) - 0.5 * r
