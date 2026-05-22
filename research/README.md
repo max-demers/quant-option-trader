@@ -9,8 +9,8 @@ The `research` module serves as the quantitative laboratory of the project. It c
 - **`Heston.py`**: Implements the Heston stochastic volatility model. It uses Fourier inversion techniques and numerical integration (Simpson's rule) to compute analytical European option prices. Includes functionality to calibrate the model to market data to extract implied parameters ($v_0, \kappa, \theta, \rho, \sigma$).
 - **`Bates.py` & `Bates_IV_Calibration.py`**: Extends the Heston model by incorporating Merton's log-normal jump-diffusion (the Bates model). These scripts handle the robust calibration of both continuous volatility parameters and jump components ($\lambda, \mu_J, \sigma_J$) to fit the market implied volatility surface accurately.
 
-### Simulation
-- **`monte_carlo.py`**: Provides a Monte Carlo simulation engine for pricing options under the Heston dynamics using Euler-Maruyama discretization. It serves as a benchmark to validate the analytical pricing formulas derived from characteristic functions.
+### Simulation & Numerical Methods
+- **`heston_models_comparaison.py`**: Provides a Monte Carlo simulation engine for pricing options under the Heston dynamics using Euler-Maruyama discretization. It also implements a Finite Differences solver using the Modified Craig-Sneyd (MCS) scheme, offering a robust numerical alternative for solving the Heston PDE.
 
 ## Key Quantitative Concepts
 - **Characteristic Functions & Fourier Inversion**: Used for fast, analytical pricing of options without relying solely on computationally expensive simulations.

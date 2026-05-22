@@ -1,7 +1,6 @@
 import numpy as np
-import yfinance as yf
 import scipy as sp
-import pandas as pd
+import matplotlib.pyplot as plt
 
 def heston_pricer_robust(S0, K, T, r, v0, kappa, theta, rho, sigma):
 
@@ -79,80 +78,94 @@ def heston_monte_carlo_pricer(S0,K,T,r,v0,kappa,theta, rho,sigma,num_simulations
     option_price_mc = np.exp(-r * T) * np.mean(payoffs) # Prend en compte le temps des interêts composés
     return option_price_mc
 
-def parameters(action):
-    # Téléchargement des données
-    df = yf.download(action, period="10y", interval="1d", progress=False)
-    if df.empty: # S'assure d'avoir des données
-        raise ValueError(f"Aucune donnée trouvée pour {action}")
+def heston_finite_differences(S0, K, T, r, v0, kappa, theta, rho, sigma, N_x, N_v, N_t):
+    # Grid Setup
+    vol_approx = np.sqrt(max(theta, 0.04))
+    x_min = np.log(S0) - 5 * vol_approx * np.sqrt(T)
+    x_max = np.log(S0) + 5 * vol_approx * np.sqrt(T)
+    v_min = 0.0
+    v_max = max(4 * theta, 1.0)
 
-    # Gestion des MultiIndex
-    if isinstance(df.columns, pd.MultiIndex):
-        # Si le premier niveau est le ticker, on le supprime
-        if action in df.columns.levels[0]:
-            df.columns = df.columns.droplevel(0)
-        else:
-            df.columns = df.columns.droplevel(1)
+    x_axe = np.linspace(x_min, x_max, N_x)
+    v_axe = np.linspace(v_min, v_max, N_v)
+    dx = x_axe[1] - x_axe[0]
+    dv = v_axe[1] - v_axe[0]
+    dt = T / N_t
 
-    # Si "Adj Close" n'existe pas, on utilise "Close"
-    col = "Adj Close" if "Adj Close" in df.columns else "Close"
-    
-    # Prix initial (S0)
-    S0 = df[col].iloc[-1]
+    x_grille, v_grille = np.meshgrid(x_axe, v_axe, indexing="ij")
+    v_vec = v_grille.flatten()
+    U_plan = np.maximum(np.exp(x_grille) - K, 0.0)
+    U = U_plan.flatten()
 
-    # Calcul du Daily Range (Estimateur de Parkinson) comme proxy de la variance instantanée
-    # v_t approx (ln(High/Low)^2) / (4 * ln(2))
-    df["Parkinson_Var"] = ((np.log(df["High"] / df["Low"]))**2) / (4 * np.log(2)) * 252
-    
-    # Rendements logarithmiques quotidiens
-    df["Return"] = np.log(df[col] / df[col].shift(1))
-    
-    # On utilise une version légèrement lissée (5 jours) de Parkinson pour réduire le bruit
-    # Cela aide à mieux voir la corrélation rho qui est souvent masquée par le bruit quotidien
-    df["Var_5d"] = df["Parkinson_Var"].rolling(5).mean()
-    df = df.dropna()
+    # A1: x-derivative operator (depends on v)
+    alpha_x_v = -(r - 0.5 * v_vec) / (2 * dx) + (0.5 * v_vec) / (dx**2)
+    beta_x_v = -v_vec / (dx**2) - 0.5 * r
+    gamma_x_v = (r - 0.5 * v_vec) / (2 * dx) + (0.5 * v_vec) / (dx**2)
 
-    # Initial variance (v0)
-    v0 = df["Var_5d"].iloc[-1]
+    A1 = sp.sparse.diags([alpha_x_v[N_v:], beta_x_v, gamma_x_v[:-N_v]], [-N_v, 0, N_v], shape=(N_x * N_v, N_x * N_v), format="lil")
+    # Boundary conditions for x (i=0 and i=N_x-1)
+    for j in range(N_v):
+        idx_0 = j
+        idx_end = (N_x - 1) * N_v + j
+        A1[idx_0, :] = 0; A1[idx_0, idx_0] = -0.5 * r
+        A1[idx_end, :] = 0; A1[idx_end, idx_end] = -0.5 * r
+    A1 = A1.tocsr()
 
-    # Long-term variance (theta)
-    theta = df["Var_5d"].mean()
+    # A2: v-derivative operator
+    alpha_v = -kappa * (theta - v_axe) / (2 * dv) + (0.5 * sigma**2 * v_axe) / (dv**2)
+    beta_v = -(sigma**2 * v_axe) / (dv**2) - 0.5 * r
+    gamma_v = kappa * (theta - v_axe) / (2 * dv) + (0.5 * sigma**2 * v_axe) / (dv**2)
 
-    # Kappa (Vitesse de retour à la moyenne)
-    y_k = df["Var_5d"].values[1:]
-    x_k = df["Var_5d"].values[:-1]
-    beta, alpha = np.polyfit(x_k, y_k, 1)
-    kappa = -np.log(max(beta, 0.0001)) * 252
+    A2_v = sp.sparse.diags([alpha_v[1:], beta_v, gamma_v[:-1]], [-1, 0, 1], shape=(N_v, N_v), format="lil")
+    A2_v[0, :] = 0; A2_v[0, 0] = -0.5 * r
+    A2_v[-1, :] = 0; A2_v[-1, -1] = -0.5 * r
+    A2 = sp.sparse.kron(sp.sparse.eye(N_x), A2_v.tocsr(), format="csr")
 
-    # Xi (Vol-of-vol) et Rho (Corrélation)
-    dt = 1/252
-    v_t = df["Var_5d"].values[:-1]
-    v_next = df["Var_5d"].values[1:]
-    
-    # Innovations de la variance lissée
-    target_dv = v_next - v_t - kappa * (theta - v_t) * dt
-    variance_innovations = target_dv / np.sqrt(np.maximum(v_t, 1e-6))
-    
-    xi = np.std(variance_innovations) * np.sqrt(252)
+    # A0: Mixed derivative operator rho * sigma * v * U_xv
+    A0 = sp.sparse.lil_matrix((N_x * N_v, N_x * N_v))
+    coef_mixte = 0.25 * rho * sigma * v_vec / (dx * dv)
+    for i in range(1, N_x - 1):
+        for j in range(1, N_v - 1):
+            idx = i * N_v + j
+            c = coef_mixte[idx]
+            A0[idx, (i + 1) * N_v + (j + 1)] = c
+            A0[idx, (i + 1) * N_v + (j - 1)] = -c
+            A0[idx, (i - 1) * N_v + (j + 1)] = -c
+            A0[idx, (i - 1) * N_v + (j - 1)] = c
+    A0 = A0.tocsr()
 
-    # Rho (Corrélation)
-    # Note: L'estimation historique de rho est souvent plus faible (ex: -0.2) que celle calibrée sur les options (-0.7).
-    returns = df["Return"].values[1:]
-    rho = np.corrcoef(returns, variance_innovations)[0, 1]
+    A_total = A0 + A1 + A2
+    theta_param = 0.5 + np.sqrt(6)/6
+    I = sp.sparse.eye(N_x * N_v, format="csr")
+    LHS_A1 = sp.sparse.linalg.factorized((I - theta_param * dt * A1).tocsc())
+    LHS_A2 = sp.sparse.linalg.factorized((I - theta_param * dt * A2).tocsc())
 
-    # Taux sans risque (r)
-    try:
-        ticker_r = yf.Ticker("CBIL.TO")
-        r = ticker_r.info.get("trailingAnnualDividendYield")
-        if r is None or r <= 0:
-            r = 0.0225
-    except:
-        r = 0.0225
+    for n in reversed(range(N_t)):
+        # Modified Craig-Sneyd (MCS) Scheme
+        # Prediction
+        Y0 = U + dt * (A_total @ U)
+        Y1 = LHS_A1(Y0 - theta_param * dt * (A1 @ U))
+        Y2 = LHS_A2(Y1 - theta_param * dt * (A2 @ U))
+        
+        # Correction
+        Z0 = Y0 + 0.5 * dt * (A0 @ (Y2 - U)) + (theta_param - 0.5) * dt * (A1 @ (Y1 - U) + A2 @ (Y2 - U))
+        Y3 = LHS_A1(Z0 - theta_param * dt * (A1 @ Y2))
+        U = LHS_A2(Y3 - theta_param * dt * (A2 @ Y2))
 
-    return float(S0), float(v0), float(r), float(theta), float(kappa), float(xi), float(rho)
+        # Enforce Boundary Conditions
+        U_mat = U.reshape((N_x, N_v))
+        t_actuel = n * dt
+        U_mat[-1, :] = np.exp(x_max) - K * np.exp(-r * (T - t_actuel))
+        U_mat[0, :] = 0.0
+        U = U_mat.flatten()
+
+    U_final = U.reshape((N_x, N_v))
+    return x_axe, v_axe, U_final
+
+
 # --- MAIN EXECUTION BLOCK ---
 if __name__ == '__main__':
 
-    # --- Part 1: Theoretical Pricing (Monte Carlo vs Analytical) ---
     print("--- Part 1: Theoretical Pricing ---")
     # Parameters for theoretical pricing
     S0_th = 100 # Prix initial
@@ -164,26 +177,34 @@ if __name__ == '__main__':
     theta_th = 0.04 # Impact du temps
     rho_th = -0.7 # corrélation entre S et v
     sigma_th = 0.3 # Volatilité de la volatilité
-    num_simulations_th = 400000 # Nombre de simulation
+    num_simulations_th = 500000 # Nombre de simulation
     num_steps_th = 252 # Nombre d'itération (jours) par simulation
+    N_t = 300
+    N_x = 800
+    N_v = 400
 
-
-
-    #option_price_mc = heston_monte_carlo_pricer(S0_th,K_th,T_th,r_th,v0_th,kappa_th,theta_th,rho_th,sigma_th,num_simulations_th,num_steps_th)
-    #print(f"European Call Option Price (Monte Carlo): {option_price_mc:.4f}")
-
-    # Analytical Price (for comparison)
-    #analytical_price_theoretical = heston_pricer_robust(S0_th, K_th, T_th, r_th, v0_th, kappa_th, theta_th, rho_th, sigma_th)
-    #print(f"Analytical European Call Option Price (Theoretical): {analytical_price_theoretical:.4f}")
     action = "SPY"
-    S0, v0, r, theta, kappa, xi, rho = parameters(action)
     print("Action choisi :", action)
-    print("Valeur de S0 :",S0)
-    print("Valeur de v0 :", v0)
-    print("Valeur de r :", r)
-    print("Valeur de theta :", theta)
-    print("Valeur de kappa :", kappa)
-    print("Valeur de xi :", xi)
-    print("Valeur de rho :", rho)
+    print("Valeur de S0 :",S0_th)
+    print("Valeur de v0 :", v0_th)
+    print("Valeur de r :", r_th)
+    print("Valeur de theta :", theta_th)
+    print("Valeur de kappa :", kappa_th)
+    print("Valeur de vol-of-vol :", sigma_th)
+    print("Valeur de rho :", rho_th)
+
+    print("Calcul du prix de l'option en cours...")
+
+    x_axe, v_axe, grille_prix = heston_finite_differences(S0_th,K_th,T_th,r_th,v0_th,kappa_th,theta_th,rho_th,sigma_th,N_x, N_v,N_t)
+    interp = sp.interpolate.RegularGridInterpolator((x_axe, v_axe), grille_prix, method="linear")
+    prix_heston_adi = interp([np.log(S0_th), v0_th])[0]
+    print(f"European Call option Price (ADI): {prix_heston_adi: .4f}")
+
+
     option_price_mc = heston_monte_carlo_pricer(S0_th,K_th,T_th,r_th,v0_th,kappa_th,theta_th,rho_th,sigma_th,num_simulations_th,num_steps_th)
     print(f"European Call Option Price (Monte Carlo): {option_price_mc:.4f}")
+    
+
+    analytical_price_theoretical = heston_pricer_robust(S0_th, K_th, T_th, r_th, v0_th, kappa_th, theta_th, rho_th, sigma_th)
+    print(f"Analytical European Call Option Price (Theoretical): {analytical_price_theoretical:.4f}")
+
