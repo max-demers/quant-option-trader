@@ -66,20 +66,20 @@ def heston_monte_carlo_pricer(S0,K,T,r,v0,kappa,theta, rho,sigma,num_simulations
     Z2 = np.random.normal(size=(num_steps, num_simulations))  # Deuxième matrice du hasard
     W1 = Z1  # Premier facteur aléatoire
     W2 = rho * Z1 + np.sqrt(1 - rho ** 2) * Z2  # Deuxième facteur aléatoire corrélé au premier
-    for t in range(1, num_steps + 1):  # Trouve la valeur de la volatilité pour chauqe case de la matrice v
+    for t in range(1, num_steps + 1):  # Trouve la valeur de la volatilité pour chaque case de la matrice v
         v_prev = np.maximum(v[t - 1, :], 0)  # Évite les valeurs négatives
         # Calcul la valeur actuelle de v (deuxième EDS de Heston)
         v[t, :] = v[t - 1, :] + kappa * (theta - v_prev) * dt + sigma * np.sqrt(v_prev * dt) * W2[t - 1,:]
     v_trunc = np.maximum(v[:-1, :], 0)  # On s'assure encore de ne pas avoir de valeur négative
     log_returns = (r - 0.5 * v_trunc) * dt + np.sqrt(v_trunc * dt) * W1  # Calcul du rendement (première EDS de Heston)
-    total_log_returns = np.sum(log_returns, axis=0)  # Somme de toute les rendements
+    total_log_returns = np.sum(log_returns, axis=0)  # Somme de tout les rendements
     S_final = S0 * np.exp(total_log_returns)  # Caclul de la matrice des prix finals en fonction de la valeur de départ
     payoffs = np.maximum(S_final - K, 0)
     option_price_mc = np.exp(-r * T) * np.mean(payoffs) # Prend en compte le temps des interêts composés
     return option_price_mc
 
 def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N_t):
-    # Grid Setup
+    # Création de la grille
     vol_approx = np.sqrt(max(theta, 0.04))
     x_min = np.log(S0) - 5 * vol_approx * np.sqrt(T)
     x_max = np.log(S0) + 5 * vol_approx * np.sqrt(T)
@@ -97,13 +97,13 @@ def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N
     U_plan = np.maximum(np.exp(x_grille) - K, 0.0)
     U = U_plan.flatten()
 
-    # A1: x-derivative operator (depends on v)
+    # A1 opérateur sur l'axe des x (dépend de v)
     alpha_x_v = -(r - 0.5 * v_vec) / (2 * dx) + (0.5 * v_vec) / (dx**2)
     beta_x_v = -v_vec / (dx**2) - 0.5 * r
     gamma_x_v = (r - 0.5 * v_vec) / (2 * dx) + (0.5 * v_vec) / (dx**2)
 
     A1 = sp.sparse.diags([alpha_x_v[N_v:], beta_x_v, gamma_x_v[:-N_v]], [-N_v, 0, N_v], shape=(N_x * N_v, N_x * N_v), format="lil")
-    # Boundary conditions for x (i=0 and i=N_x-1)
+    # Condition de limite
     for j in range(N_v):
         idx_0 = j
         idx_end = (N_x - 1) * N_v + j
@@ -112,7 +112,7 @@ def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N
     A1 = A1.tocsr()
 
 
-    # A2: v-derivative operator
+    # A2 opérateur sur l'axe des v
     alpha_v = -kappa * (theta - v_axe) / (2 * dv) + (0.5 * sigma**2 * v_axe) / (dv**2)
     beta_v = -(sigma**2 * v_axe) / (dv**2) - 0.5 * r
     gamma_v = kappa * (theta - v_axe) / (2 * dv) + (0.5 * sigma**2 * v_axe) / (dv**2)
@@ -122,7 +122,7 @@ def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N
     A2_v[-1, :] = 0; A2_v[-1, -1] = -0.5 * r
     A2 = sp.sparse.kron(sp.sparse.eye(N_x), A2_v.tocsr(), format="csr")
 
-    # A0: Mixed derivative operator rho * sigma * v * U_xv
+    # A0 opérateur des dérivés mixtes
     A0 = sp.sparse.lil_matrix((N_x * N_v, N_x * N_v))
     coef_mixte = 0.25 * rho * sigma * v_vec / (dx * dv)
     for i in range(1, N_x - 1):
@@ -142,8 +142,8 @@ def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N
     LHS_A2 = sp.sparse.linalg.factorized((I - theta_param * dt * A2).tocsc())
 
     for n in reversed(range(N_t)):
-        # Modified Craig-Sneyd (MCS) Scheme
-        # Prediction
+        # Modified Craig-Sneyd (MCS)
+        # Prédiction
         Y0 = U + dt * (A_total @ U)
         Y1 = LHS_A1(Y0 - theta_param * dt * (A1 @ U))
         Y2 = LHS_A2(Y1 - theta_param * dt * (A2 @ U))
@@ -153,7 +153,7 @@ def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N
         Y3 = LHS_A1(Z0 - theta_param * dt * (A1 @ Y2))
         U = LHS_A2(Y3 - theta_param * dt * (A2 @ Y2))
 
-        # Enforce Boundary Conditions
+        # reforce les conditions limites
         U_mat = U.reshape((N_x, N_v))
         t_actuel = n * dt
         U_mat[-1, :] = np.exp(x_max) - K * np.exp(-r * (T - t_actuel))
@@ -209,4 +209,6 @@ if __name__ == '__main__':
 
     analytical_price_theoretical = heston_pricer_robust(S0_th, K_th, T_th, r_th, v0_th, kappa_th, theta_th, rho_th, sigma_th)
     print(f"Analytical European Call Option Price (Theoretical): {analytical_price_theoretical:.4f}")
+
+
 
