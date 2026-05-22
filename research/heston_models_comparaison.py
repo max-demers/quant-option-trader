@@ -78,7 +78,7 @@ def heston_monte_carlo_pricer(S0,K,T,r,v0,kappa,theta, rho,sigma,num_simulations
     option_price_mc = np.exp(-r * T) * np.mean(payoffs) # Prend en compte le temps des interêts composés
     return option_price_mc
 
-def heston_finite_differences(S0, K, T, r, v0, kappa, theta, rho, sigma, N_x, N_v, N_t):
+def heston_finite_differences(S0, K, T, r, kappa, theta, rho, sigma, N_x, N_v, N_t):
     # Grid Setup
     vol_approx = np.sqrt(max(theta, 0.04))
     x_min = np.log(S0) - 5 * vol_approx * np.sqrt(T)
