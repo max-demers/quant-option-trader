@@ -163,6 +163,7 @@ def heston_finite_differences(S0, K, T, r, v0, kappa, theta, rho, sigma, N_x, N_
     return x_axe, v_axe, U_final
 
 
+
 # --- MAIN EXECUTION BLOCK ---
 if __name__ == '__main__':
 

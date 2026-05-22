@@ -16,3 +16,4 @@ The `research` module serves as the quantitative laboratory of the project. It c
 - **Characteristic Functions & Fourier Inversion**: Used for fast, analytical pricing of options without relying solely on computationally expensive simulations.
 - **Differential Evolution**: A stochastic population-based optimization algorithm used to minimize the Vega-weighted Root Mean Square Error (RMSE) during model calibration, avoiding local minima.
 - **Implied Volatility Surfaces**: 3D visualization of the market's expectation of future volatility across different strikes and maturities.
+
